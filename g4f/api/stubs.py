@@ -60,6 +60,11 @@ class RequestConfig(BaseModel):
     # After this the agent stops passing responses and ends with a finish reason.
     agent_timeout: Optional[int] = None
 
+    # NEW: allow arbitrary "headers" dict in the request body (e.g. url-to-send,
+    # real-url-request, real-domain-request, realip, realport). This is consumed
+    # by the API layer to optionally route via a proxy endpoint.
+    headers: Optional[dict] = None
+
 
 class ChatCompletionsConfig(RequestConfig):
     messages: Messages = Field(

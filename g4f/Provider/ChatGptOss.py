@@ -5,11 +5,9 @@ import hashlib
 import time
 import random
 
-from aiohttp import ClientSession
-
 from ..typing import AsyncResult, Messages
 from .base_provider import AsyncGeneratorProvider, ProviderModelMixin
-
+from ..requests import StreamSession  # switched
 
 class ChatGptOss(AsyncGeneratorProvider, ProviderModelMixin):
     """
@@ -95,7 +93,7 @@ class ChatGptOss(AsyncGeneratorProvider, ProviderModelMixin):
             "reasoning_effort": "low",
         }
 
-        async with ClientSession(headers=headers) as session:
+        async with StreamSession(headers=headers, proxy=proxy) as session:
             async with session.post(
                 cls.api_endpoint,
                 json=payload,

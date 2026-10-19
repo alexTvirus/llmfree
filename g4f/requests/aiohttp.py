@@ -15,6 +15,7 @@ from typing import AsyncIterator, Any, Optional
 
 from .defaults import DEFAULT_HEADERS, has_brotli
 from ..errors import MissingRequirementsError
+from functools import partialmethod
 
 _loop_connectors: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, TCPConnector] = weakref.WeakKeyDictionary()
 
@@ -115,12 +116,44 @@ class StreamSession:
             connector_owner=connector_owner,
             headers=headers,
         )
+        # store session-level headers for proxy detection/merging
+        try:
+            self._session_headers = dict(headers) if headers else {}
+        except Exception:
+            self._session_headers = {}
 
     async def __aenter__(self) -> ClientSession:
         return self.inner
 
     async def __aexit__(self, *args, **kwargs) -> None:
         await self.inner.close()
+
+    async def request(self, method: str, url: str, ssl=None, **kwargs):
+        """Wrap ClientSession.request to honor a proxy instruction in headers.
+
+        If either session-level headers or per-call headers include 'url-to-send'
+        (or 'url_to_send'), the request is sent to that URL instead of `url`.
+        This allows the API client to pass a proxy endpoint in the body headers
+        and have the HTTP client route the request accordingly.
+        """
+        # Per-call headers
+        call_headers = kwargs.get("headers") or {}
+        # Combine session headers and per-call headers for detection
+        combined = {**(self._session_headers or {}), **(call_headers or {})}
+        combined_lower = {k.lower(): v for k, v in combined.items()}
+        proxy_target = combined_lower.get("url-to-send") or combined_lower.get("url_to_send")
+        target_url = proxy_target if proxy_target else url
+        # Proceed with the actual request using the target_url
+        return await self.inner.request(method, target_url, **kwargs)
+
+    # Convenience partials for HTTP methods so callers can use session.post/get
+    head = partialmethod(request, "HEAD")
+    get = partialmethod(request, "GET")
+    post = partialmethod(request, "POST")
+    put = partialmethod(request, "PUT")
+    patch = partialmethod(request, "PATCH")
+    delete = partialmethod(request, "DELETE")
+    options = partialmethod(request, "OPTIONS")
 
 
 def get_connector(

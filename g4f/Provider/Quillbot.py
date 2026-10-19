@@ -1,11 +1,11 @@
 import json
 import uuid
-from aiohttp import ClientSession
 from typing import AsyncGenerator
 
 from ..typing import AsyncResult, Messages
 from .base_provider import AsyncGeneratorProvider, ProviderModelMixin
 from ..providers.helper import format_prompt
+from ..requests import StreamSession, FormData  # switched to StreamSession
 
 
 class Quillbot(AsyncGeneratorProvider, ProviderModelMixin):
@@ -68,10 +68,8 @@ class Quillbot(AsyncGeneratorProvider, ProviderModelMixin):
         if model == "quillbot-search" or kwargs.get("web_search"):
             payload["tools"] = {"web_search_builtin": {}}
 
-        async with ClientSession() as session:
-            async with session.post(
-                api_url, headers=headers, json=payload, proxy=proxy
-            ) as response:
+        async with StreamSession(headers=headers, proxy=proxy) as session:
+            async with session.post(api_url, headers=headers, json=payload, proxy=proxy) as response:
                 response.raise_for_status()
 
                 async for line in response.content:

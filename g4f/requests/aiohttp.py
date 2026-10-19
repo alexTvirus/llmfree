@@ -122,8 +122,9 @@ class StreamSession:
         except Exception:
             self._session_headers = {}
 
-    async def __aenter__(self) -> ClientSession:
-        return self.inner
+    async def __aenter__(self) -> "StreamSession":
+        # Return the wrapper session so callers use our request() implementation.
+        return self
 
     async def __aexit__(self, *args, **kwargs) -> None:
         await self.inner.close()

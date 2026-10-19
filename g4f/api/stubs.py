@@ -18,8 +18,6 @@ class RequestConfig(BaseModel):
     max_tokens: Optional[int] = None
     stop: Union[list[str], str, None] = None
     api_key: Optional[Union[str, dict[str, str]]] = None
-    # NEW: allow arbitrary headers to be forwarded to provider requests
-    headers: Optional[dict] = None
     web_search: Optional[Union[str, bool]] = None
     conversation: Optional[dict] = None
     timeout: Optional[int] = None
@@ -61,6 +59,11 @@ class RequestConfig(BaseModel):
     # Total time budget in seconds for agent models (e.g. "agent-tools").
     # After this the agent stops passing responses and ends with a finish reason.
     agent_timeout: Optional[int] = None
+
+    # NEW: allow arbitrary "headers" dict in the request body (e.g. url-to-send,
+    # real-url-request, real-domain-request, realip, realport). This is consumed
+    # by the API layer to optionally route via a proxy endpoint.
+    headers: Optional[dict] = None
 
 
 class ChatCompletionsConfig(RequestConfig):
@@ -117,8 +120,6 @@ class MessagesConfig(BaseModel):
     raw: bool = False
     extra_body: Optional[dict] = None
     tool_emulation: Optional[bool] = None
-    # NEW: allow forwarding arbitrary headers (e.g. url-to-send)
-    headers: Optional[dict] = None
 
 
 class ImageGenerationConfig(BaseModel):
@@ -127,8 +128,6 @@ class ImageGenerationConfig(BaseModel):
     provider: Optional[str] = None
     response_format: Optional[str] = None
     api_key: Optional[str] = None
-    # NEW: allow forwarding arbitrary headers to image provider requests
-    headers: Optional[dict] = None
     width: Optional[int] = None
     height: Optional[int] = None
     num_inference_steps: Optional[int] = None

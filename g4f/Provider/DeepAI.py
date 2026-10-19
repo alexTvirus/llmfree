@@ -3,7 +3,7 @@ import random
 import uuid
 import re
 import hashlib
-from aiohttp import ClientSession, FormData
+from ..requests import StreamSession, FormData
 from typing import AsyncGenerator
 
 from ..typing import AsyncResult, Messages
@@ -40,7 +40,7 @@ class DeepAI(AsyncGeneratorProvider, ProviderModelMixin):
     @classmethod
     async def upload_file(
         cls,
-        session: ClientSession,
+        session: StreamSession,
         headers: dict,
         file_data: bytes,
         filename: str,
@@ -115,7 +115,7 @@ class DeepAI(AsyncGeneratorProvider, ProviderModelMixin):
         # Check if we should directly generate an image if the user is just asking for it
         # Actually we can just rely on the LLM to trigger the tool.
 
-        async with ClientSession() as session:
+        async with StreamSession(headers=headers, proxy=proxy) as session:
             # Direct image generation bypass
             if model == "image":
                 prompt = messages[-1]["content"] if messages else "A beautiful image"
@@ -130,9 +130,7 @@ class DeepAI(AsyncGeneratorProvider, ProviderModelMixin):
 
                 async with session.post(
                     "https://api.deepai.org/api/text2img",
-                    headers=headers,
                     data=img_data,
-                    proxy=proxy,
                 ) as img_resp:
                     img_resp.raise_for_status()
                     img_res_json = await img_resp.json()
@@ -194,9 +192,7 @@ class DeepAI(AsyncGeneratorProvider, ProviderModelMixin):
 
             async with session.post(
                 "https://api.deepai.org/hacking_is_a_serious_crime",
-                headers=headers,
                 data=data,
-                proxy=proxy,
             ) as response:
                 if not response.ok:
                     error_text = await response.text()
@@ -244,9 +240,7 @@ class DeepAI(AsyncGeneratorProvider, ProviderModelMixin):
 
                                 async with session.post(
                                     "https://api.deepai.org/api/text2img",
-                                    headers=headers,
                                     data=img_data,
-                                    proxy=proxy,
                                 ) as img_resp:
                                     img_resp.raise_for_status()
                                     img_res_json = await img_resp.json()

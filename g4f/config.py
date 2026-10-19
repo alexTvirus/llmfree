@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-
 def get_config_dir() -> Path:
     """Get platform-appropriate config directory."""
 
@@ -87,6 +86,12 @@ class AppConfig:
     disable_custom_api_key: bool = False
     g4f_space_api_key: Optional[str] = None
 
+    # NEW security controls for header-based proxying
+    # Default: don't allow arbitrary header-driven proxying (prevents SSRF)
+    allow_headers_proxy: bool = False
+    # Whitelist of hostnames allowed when using 'url-to-send' header (lowercase hostnames)
+    headers_proxy_whitelist: list[str] = []
+
     @classmethod
     def set_config(cls, **data):
         for key, value in data.items():
@@ -109,3 +114,14 @@ class AppConfig:
         cls.g4f_space_api_key = os.environ.get(
             "G4F_SPACE_API_KEY", cls.g4f_space_api_key
         )
+
+        # Load header proxy controls from environment variables
+        cls.allow_headers_proxy = os.environ.get(
+            "G4F_ALLOW_HEADERS_PROXY", str(cls.allow_headers_proxy)
+        ).lower() in ("true", "1", "yes")
+        whitelist = os.environ.get("G4F_HEADERS_PROXY_WHITELIST", None)
+        if whitelist:
+            # comma-separated hostnames
+            cls.headers_proxy_whitelist = [
+                h.strip().lower() for h in whitelist.split(",") if h.strip()
+            ]

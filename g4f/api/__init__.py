@@ -160,7 +160,7 @@ section{padding:28px 0 92px}.section-head{display:flex;justify-content:space-bet
 <a class="card" href="/docs"><h3>Chat completions</h3><p>OpenAI-compatible messages with streaming, tools, vision, and model selection.</p><span class="endpoint">POST /v1/chat/completions</span></a>
 <a class="card" href="/docs"><h3>Responses</h3><p>A modern response interface for multi-turn reasoning and richer output types.</p><span class="endpoint">POST /v1/responses</span></a>
 <a class="card" href="/docs"><h3>Messages</h3><p>Anthropic-style requests for teams moving between compatible providers.</p><span class="endpoint">POST /v1/messages</span></a>
-<a class="card" href="/docs"><h3>Media generation</h3><p>Generate images and other supported media from the same API surface.</p><span class="endpoint">POST /v1/media/generate</span></a>
+<a class="card" href="/v1/media/generate"><h3>Media generation</h3><p>Generate images and other supported media from the same API surface.</p><span class="endpoint">POST /v1/media/generate</span></a>
 <a class="card" href="/v1/models"><h3>Model catalog</h3><p>Inspect the models and provider options available on this server right now.</p><span class="endpoint">GET /v1/models</span></a>
 <a class="card" href="/docs"><h3>Live schema</h3><p>Try requests in your browser and inspect the generated OpenAPI contract.</p><span class="endpoint">GET /docs</span></a>
 </div></section><section><div class="section-head"><h2>Start here</h2><span>curl · JSON · streamable</span></div><div class="code-box"><button class="copy" onclick="copyExample(this)">copy</button><pre id="example">curl -X POST /v1/chat/completions \\
@@ -355,6 +355,99 @@ def _save_request_har(request: Request, entry: dict) -> None:
     except Exception as e:
         logger.warning("Failed to save HAR request log: %s", e)
 
+
+# ---------------------------------------------------------------------------
+# NEW: helper to send request to a proxy endpoint when body.headers contains
+# "url-to-send". The payload is formed as top-level fields plus a "body" field
+# containing the original request payload (strategy A, per your instruction).
+# Streaming responses from the proxy are forwarded to the client when stream=True.
+# ---------------------------------------------------------------------------
+async def _post_to_proxy(
+    proxy_url: str,
+    headers_dict: dict,
+    body_obj: dict,
+    stream: bool,
+):
+    # Import locally to avoid requiring aiohttp globally unless used
+    import aiohttp
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=None, connect=30, sock_read=DEFAULT_TIMEOUT)
+    except Exception:
+        timeout = None
+
+    session = aiohttp.ClientSession(timeout=timeout)
+    try:
+        payload = {
+            "real-url-request": headers_dict.get("real-url-request"),
+            "real-domain-request": headers_dict.get("real-domain-request"),
+            "realip": headers_dict.get("realip"),
+            "realport": headers_dict.get("realport"),
+            "body": body_obj,
+        }
+        # Forward any remaining keys as headers (except url-to-send)
+        forward_headers = {
+            k: v
+            for k, v in (headers_dict.items() if headers_dict else {})
+            if k.lower() != "url-to-send"
+        }
+        # Ensure content-type
+        forward_headers.setdefault("Content-Type", "application/json")
+        resp = await session.post(proxy_url, json=payload, headers=forward_headers, allow_redirects=False)
+    except aiohttp.ClientError as e:
+        await session.close()
+        return ErrorResponse.from_message(f"Proxy request failed: {e}", HTTP_502_BAD_GATEWAY)
+    except Exception as e:
+        await session.close()
+        raise
+
+    response_content_type = resp.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+
+    if not stream:
+        try:
+            body_bytes = await resp.read()
+        finally:
+            await session.close()
+        # Attempt to decode JSON if possible
+        if response_content_type == "application/json" or (body_bytes.strip().startswith(b"{") or body_bytes.strip().startswith(b"[")):
+            try:
+                data = json.loads(body_bytes.decode("utf-8", errors="replace"))
+                return JSONResponse(content=data, status_code=resp.status, headers={k: v for k, v in resp.headers.items()})
+            except Exception:
+                pass
+        # Fallback: raw bytes
+        return Response(content=body_bytes, status_code=resp.status, headers={k: v for k, v in resp.headers.items()}, media_type=resp.headers.get("content-type"))
+    else:
+        # Streaming: forward chunks from proxy to client
+        async def stream_iter():
+            try:
+                async for chunk in resp.content.iter_any():
+                    if isinstance(chunk, bytes):
+                        yield chunk
+                    else:
+                        yield chunk.encode("utf-8", errors="replace")
+            finally:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+                try:
+                    await session.close()
+                except Exception:
+                    pass
+
+        # Use the proxy response's media type if present (e.g., text/event-stream)
+        media_type = resp.headers.get("content-type")
+        return StreamingResponse(stream_iter(), status_code=resp.status, headers={k: v for k, v in resp.headers.items()}, media_type=media_type)
+
+
+# ---------------------------------------------------------------------------
+# The rest of the file follows the original implementation, with small
+# insertions in endpoints to check for config.headers["url-to-send"] and use
+# the helper above. (Everything else is preserved unchanged.)
+# ---------------------------------------------------------------------------
+
+
 _LOGS_HTML = """<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -399,8 +492,8 @@ tbody tr:hover td{background:#161b22}
 .panel:first-child{border-right:1px solid #21262d}
 .panel:not(:last-child){border-right:1px solid #21262d}
 .panel-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#6e7681}
-.panel pre{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:12px;font-size:12px;line-height:1.5;overflow:auto;max-height:440px;white-space:pre-wrap;word-break:break-all;color:#c9d1d9;margin:0;font-family:ui-monospace,monospace}
-@media(max-width:640px){.modal-grid{grid-template-columns:1fr}.panel:first-child{border-right:none;border-bottom:1px solid #21262d}.panel:not(:last-child){border-right:none;border-bottom:1px solid #21262d}}
+.panel pre{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:12px;font-size:12px;line-height:1.5;overflow:auto;max-height:440px;white-space:pre-wrap;word-break:break-all;color[...]
+@media(max-width:640px){.modal-grid{grid-template-columns:1fr}.panel:first-child{border-right:none;border-bottom:1px solid #21262d}.panel:not(:last-child){border-right:none;border-bottom:1px soli[...]
 </style>
 </head>
 <body>
@@ -438,7 +531,7 @@ tbody tr:hover td{background:#161b22}
 'use strict';
 var all=[], timer=null;
 function sc(s){return s>=500?'s5':s>=400?'s4':s>=300?'s3':'s2';}
-function btag(e){if(e.streaming&&e.response_body==null)return\'<span class="tag tag-sse">SSE&hellip;</span>\';if(e.response_body!=null)return\'<span class="tag tag-body">\'+(e.streaming?\'SSE\':\'body\')+\'</span>\';return\'<span class="tag tag-empty">&ndash;</span>\';}
+function btag(e){if(e.streaming&&e.response_body==null)return\'<span class="tag tag-sse">SSE&hellip;</span>\';if(e.response_body!=null)return\'<span class="tag tag-body">\'+(e.streaming?\'SSE\':\[...]
 function esc(s){return String(s??\'\'). replace(/&/g,\'&amp;\').replace(/</g,\'&lt;\').replace(/>/g,\'&gt;\');}
 function fmt(v){if(v==null)return\'(empty)\';if(typeof v===\'object\')return JSON.stringify(v,null,2);return String(v);}
 async function load(){

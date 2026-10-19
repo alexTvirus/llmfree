@@ -1,13 +1,12 @@
 from __future__ import annotations
 import time
-from aiohttp import ClientSession
-
+from typing import AsyncGenerator
 from ..typing import AsyncResult, Messages
 from ..requests.raise_for_status import raise_for_status
 from .base_provider import AsyncGeneratorProvider, ProviderModelMixin
 from .helper import format_prompt
 from ..providers.response import FinishReason, JsonConversation
-
+from ..requests import StreamSession  # switched
 
 class Conversation(JsonConversation):
     userId: str = None
@@ -64,7 +63,7 @@ class Yqcloud(AsyncGeneratorProvider, ProviderModelMixin):
             system_message = current_messages[0]["content"]
             current_messages = current_messages[1:]
 
-        async with ClientSession(headers=headers) as session:
+        async with StreamSession(headers=headers, proxy=proxy) as session:
             prompt = format_prompt(current_messages)
             data = {
                 "prompt": prompt,

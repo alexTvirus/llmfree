@@ -12,10 +12,11 @@ from aiohttp import (
     FormData,
 )
 from typing import AsyncIterator, Any, Optional
+from urllib.parse import urlparse
 
 from .defaults import DEFAULT_HEADERS, has_brotli
 from ..errors import MissingRequirementsError
-from functools import partialmethod
+from ..config import AppConfig  # for security checks
 
 _loop_connectors: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, TCPConnector] = weakref.WeakKeyDictionary()
 
@@ -73,6 +74,14 @@ class StreamResponse(ClientResponse):
 
 
 class StreamSession:
+    """
+    Wrapper around aiohttp.ClientSession that:
+      - stores session-level headers (lowercased keys)
+      - intercepts request(...) calls to optionally route to a header-provided target
+        (e.g. headers: { "url-to-send": "https://proxy..." })
+      - honors AppConfig.allow_headers_proxy and AppConfig.headers_proxy_whitelist
+    """
+
     def __init__(
         self,
         headers=None,
@@ -108,7 +117,9 @@ class StreamSession:
         if connector_owner is None:
             connector_owner = True
 
-        self.inner = ClientSession(
+        # Save session-level headers for lookup (lowercased keys)
+        self._session_headers = {k.lower(): v for k, v in headers.items()} if headers else {}
+        self._inner = ClientSession(
             **kwargs,
             timeout=timeout,
             response_class=StreamResponse,
@@ -116,45 +127,83 @@ class StreamSession:
             connector_owner=connector_owner,
             headers=headers,
         )
-        # store session-level headers for proxy detection/merging
-        try:
-            self._session_headers = dict(headers) if headers else {}
-        except Exception:
-            self._session_headers = {}
 
     async def __aenter__(self) -> "StreamSession":
-        # Return the wrapper session so callers use our request() implementation.
+        # Return wrapper so we can intercept request() calls
         return self
 
     async def __aexit__(self, *args, **kwargs) -> None:
-        await self.inner.close()
+        await self._inner.close()
 
-    async def request(self, method: str, url: str, ssl=None, **kwargs):
-        """Wrap ClientSession.request to honor a proxy instruction in headers.
+    async def close(self) -> None:
+        await self._inner.close()
 
-        If either session-level headers or per-call headers include 'url-to-send'
-        (or 'url_to_send'), the request is sent to that URL instead of `url`.
-        This allows the API client to pass a proxy endpoint in the body headers
-        and have the HTTP client route the request accordingly.
+    async def _should_route_via_header(self, combined_headers: dict) -> Optional[str]:
         """
-        # Per-call headers
-        call_headers = kwargs.get("headers") or {}
-        # Combine session headers and per-call headers for detection
-        combined = {**(self._session_headers or {}), **(call_headers or {})}
-        combined_lower = {k.lower(): v for k, v in combined.items()}
-        proxy_target = combined_lower.get("url-to-send") or combined_lower.get("url_to_send")
-        target_url = proxy_target if proxy_target else url
-        # Proceed with the actual request using the target_url
-        return await self.inner.request(method, target_url, **kwargs)
+        Decide whether we should route using header url-to-send.
+        Returns the target URL string if allowed, otherwise None.
+        """
+        proxy_target = combined_headers.get("url-to-send") or combined_headers.get("url_to_send")
+        if not proxy_target:
+            return None
 
-    # Convenience partials for HTTP methods so callers can use session.post/get
-    head = partialmethod(request, "HEAD")
-    get = partialmethod(request, "GET")
-    post = partialmethod(request, "POST")
-    put = partialmethod(request, "PUT")
-    patch = partialmethod(request, "PATCH")
-    delete = partialmethod(request, "DELETE")
-    options = partialmethod(request, "OPTIONS")
+        # Security checks controlled by AppConfig
+        if not getattr(AppConfig, "allow_headers_proxy", False):
+            return None
+
+        try:
+            parsed = urlparse(proxy_target)
+            host = (parsed.hostname or "").lower()
+        except Exception:
+            return None
+
+        whitelist = getattr(AppConfig, "headers_proxy_whitelist", []) or []
+        if whitelist:
+            if host in whitelist:
+                return proxy_target
+            return None
+
+        # If whitelist empty and allow_headers_proxy=True: allow all hosts (use cautiously)
+        return proxy_target
+
+    async def request(self, method: str, url: str, **kwargs) -> StreamResponse:
+        """
+        Intercept requests to optionally route to header-provided target.
+        Works with the usage pattern:
+            async with StreamSession(headers=...) as session:
+                async with session.post(url, ...) as resp:
+                    ...
+        """
+        call_headers = kwargs.get("headers") or {}
+        # combine session headers + per-call headers (lower-case keys)
+        combined = {**(self._session_headers or {}), **{k.lower(): v for k, v in call_headers.items()}}
+        target = await self._should_route_via_header(combined)
+        target_url = target if target else url
+
+        # keep headers param as provided (ClientSession will merge session headers and per-call headers)
+        return await self._inner.request(method, target_url, **kwargs)
+
+    # expose convenience methods like ClientSession
+    async def get(self, url: str, **kwargs):
+        return await self.request("GET", url, **kwargs)
+
+    async def post(self, url: str, **kwargs):
+        return await self.request("POST", url, **kwargs)
+
+    async def put(self, url: str, **kwargs):
+        return await self.request("PUT", url, **kwargs)
+
+    async def patch(self, url: str, **kwargs):
+        return await self.request("PATCH", url, **kwargs)
+
+    async def delete(self, url: str, **kwargs):
+        return await self.request("DELETE", url, **kwargs)
+
+    async def head(self, url: str, **kwargs):
+        return await self.request("HEAD", url, **kwargs)
+
+    async def options(self, url: str, **kwargs):
+        return await self.request("OPTIONS", url, **kwargs)
 
 
 def get_connector(

@@ -18,6 +18,8 @@ class RequestConfig(BaseModel):
     max_tokens: Optional[int] = None
     stop: Union[list[str], str, None] = None
     api_key: Optional[Union[str, dict[str, str]]] = None
+    # NEW: allow arbitrary headers to be forwarded to provider requests
+    headers: Optional[dict] = None
     web_search: Optional[Union[str, bool]] = None
     conversation: Optional[dict] = None
     timeout: Optional[int] = None
@@ -115,6 +117,8 @@ class MessagesConfig(BaseModel):
     raw: bool = False
     extra_body: Optional[dict] = None
     tool_emulation: Optional[bool] = None
+    # NEW: allow forwarding arbitrary headers (e.g. url-to-send)
+    headers: Optional[dict] = None
 
 
 class ImageGenerationConfig(BaseModel):
@@ -123,6 +127,8 @@ class ImageGenerationConfig(BaseModel):
     provider: Optional[str] = None
     response_format: Optional[str] = None
     api_key: Optional[str] = None
+    # NEW: allow forwarding arbitrary headers to image provider requests
+    headers: Optional[dict] = None
     width: Optional[int] = None
     height: Optional[int] = None
     num_inference_steps: Optional[int] = None

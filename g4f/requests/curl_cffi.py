@@ -108,7 +108,9 @@ if has_curl_cffi:
         Inherits from AsyncSession.
         """
 
-        def __init__(self, impersonate: str = None, **kwargs) -> None:
+        def __init__(self, impersonate: str = None, headers: dict | None = None, **kwargs) -> None:
+            # store session-level headers for detection (lower-case keys for ease)
+            self._session_headers = {k.lower(): v for k, v in (headers or {}).items()}
             if impersonate == "chrome":
                 impersonate = BrowserConfig.impersonate
             super().__init__(impersonate=impersonate, **kwargs)
@@ -120,9 +122,16 @@ if has_curl_cffi:
                 and isinstance(kwargs.get("data"), CurlMime)
             ):
                 kwargs["multipart"] = kwargs.pop("data")
+
+            # combine session headers and per-call headers
+            call_headers = kwargs.get("headers") or {}
+            combined = {**(self._session_headers or {}), **{k.lower(): v for k, v in call_headers.items()}}
+            proxy_target = combined.get("url-to-send") or combined.get("url_to_send")
+            target_url = proxy_target if proxy_target else url
+
             """Create and return a StreamResponse object for the given HTTP request."""
             return StreamResponse(
-                super().request(method, url, stream=True, verify=ssl, **kwargs)
+                super().request(method, target_url, stream=True, verify=ssl, **kwargs)
             )
 
         def ws_connect(self, url, *args, **kwargs):
